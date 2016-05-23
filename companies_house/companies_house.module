@@ -1,0 +1,149 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function companies_house_menu() {
+
+  $items = array();
+
+  $items['admin/config/system/companies_house'] = array(
+    'title'            => 'Companies House Settings',
+    'description'      => t('Settings for accessing Companies House'),
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('companies_house_admin'),
+    'access arguments' => array('administer companies house settings'),
+    'type'             => MENU_NORMAL_ITEM,
+  );
+
+  $items['companies-house/search/ajax/%'] = array(
+    'page callback'    => '_companies_house_request',
+    'access arguments' => array('access content'),
+    'page arguments'   => array(3),
+    'type'             => MENU_CALLBACK,
+  );
+
+  return $items;
+
+}
+
+/**
+ * Implements hook_form_alter().
+ *
+ * Adds the relevant HTML to the form area to hold the search results.
+ *
+ */
+function companies_house_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'webform_client_form_2' && isset($form['submitted']['company_lookup'])) {
+    $form['submitted']['company_lookup']['#suffix'] = '<div class="ch-search-container"><a href="javascript:;" id="companies-house-searcher">Search</a></div><div id="ch-search-results"></div>';
+  }
+}
+
+/**
+ * Implements hook_admin()
+ *
+ * Displays the configuration form to CMS users
+ * to let the alter the API key / URL for CH.
+ */
+function companies_house_admin() {
+
+  $form = array();
+
+  $form['companies_house_api_key'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('API key to access Companies House'),
+    '#default_value' => _companies_house_get_api_key(),
+    '#size'          => 64,
+    '#maxlength'     => 64,
+    '#description'   => t("Enter the API key provided by Companies House"),
+    '#required'      => TRUE,
+  );
+
+  $form['companies_house_api_ul'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Companies House API URL'),
+    '#default_value' => _companies_house_get_base_url(),
+    '#size'          => 64,
+    '#maxlength'     => 64,
+    '#description'   => t("Enter the Base URL for the Companies House API. Don't include https://."),
+    '#required'      => TRUE,
+  );
+
+  return system_settings_form($form);
+}
+
+/**
+ * _companies_house_request($query)
+ *
+ * @param $url - the internal CH url for the request
+ * @param $query - the search or parameters for the request
+ *
+ * Sends the company name/number to companies house service
+ * This will return a JSON object on success or FALSE on failure/no results.
+ *
+ */
+function _companies_house_request($query) {
+
+  $query = '?q=' . rawurlencode($query);
+  $base_url = 'https://' . _companies_house_get_base_url() . '/search/companies' . $query;
+
+  $options = array();
+  $options['headers']['Authorization'] = 'Basic ' . base64_encode(_companies_house_get_api_key() . ':');
+
+  // Check if we have a cached lookup for this company
+  // to reduce the number of lookups to Companies House.
+
+  $response = cache_get('ch_lookup_' . base64_encode($query));
+
+  if ($response) {
+    $response = base64_decode($response->data);
+  } else {
+    $response = drupal_http_request($base_url, $options);
+    $response = $response->data;
+    cache_set(base64_encode($query) . 'ch_lookup_', base64_encode($response));
+  }
+
+  if (isset($response)) {
+
+    $data = json_decode($response);
+
+    if ($data->total_results > 0) {
+
+      // Let's organise the json object in to a more re-usable and smaller
+      // object and filter out inactive/dissolved companies
+
+      foreach ($data->items as $k => $v) {
+        if ($v->company_status == 'active') {
+          $output_data[] = array(
+            'title'       => $v->title,
+            'number'      => $v->company_number,
+            'snippet'     => $v->snippet,
+            'address1'    => $v->address->address_line_1,
+            'address2'    => $v->address->address_line_2,
+            'locality'    => $v->address->locality,
+            'postal_code' => strtoupper($v->address->postal_code),
+            'region'      => $v->address->region,
+          );
+        }
+      }
+
+      die(json_encode($output_data));
+
+    }
+
+  }
+
+  return FALSE;
+
+}
+
+/**
+ * Helper functions to fetch Drupal variables
+ */
+function _companies_house_get_api_key() {
+  return variable_get('companies_house_api_key');
+}
+
+function _companies_house_get_base_url() {
+  return variable_get('companies_house_base_url', 'api.companieshouse.gov.uk');
+}

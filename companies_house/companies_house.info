@@ -1,0 +1,7 @@
+name        = Companies House Search
+description = "Query the CH database for a company number"
+package     = "One"
+core        = 7.x
+version     = 7.x-1.0
+
+files[]     = companies_house.module
